@@ -29,6 +29,7 @@ public:
             }
             _lru_head.reset();
         }
+        //_lru_head.reset(); // TODO: Here is stack overflow
     }
 
     // Implements Afina::Storage interface
@@ -51,7 +52,7 @@ private:
     using lru_node = struct lru_node {
         const std::string key;
         std::string value;
-        std::unique_ptr<lru_node> prev;
+        lru_node *prev;
         std::unique_ptr<lru_node> next;
         lru_node(const std::string& key) : key(key) {}
     };
@@ -59,7 +60,7 @@ private:
     // Maximum number of bytes could be stored in this cache.
     // i.e all (keys+values) must be less the _max_size
     std::size_t _max_size;
-
+    
     // Number of bytes storing in the cache
     std::size_t _curr_size = 0;
 

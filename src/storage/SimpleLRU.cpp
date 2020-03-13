@@ -1,4 +1,5 @@
 #include "SimpleLRU.h"
+#include <cassert>
 
 namespace Afina {
 namespace Backend {
