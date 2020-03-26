@@ -13,12 +13,9 @@
 #include "format.h"
 #include <ctime>
 
-namespace fmt
-{
+namespace fmt {
 template <typename ArgFormatter>
-void format(BasicFormatter<char, ArgFormatter> &f,
-            const char *&format_str, const std::tm &tm)
-{
+void format(BasicFormatter<char, ArgFormatter> &f, const char *&format_str, const std::tm &tm) {
     if (*format_str == ':')
         ++format_str;
     const char *end = format_str;
@@ -31,17 +28,14 @@ void format(BasicFormatter<char, ArgFormatter> &f,
     format[format.size() - 1] = '\0';
     Buffer<char> &buffer = f.writer().buffer();
     std::size_t start = buffer.size();
-    for (;;)
-    {
+    for (;;) {
         std::size_t size = buffer.capacity() - start;
         std::size_t count = std::strftime(&buffer[start], size, &format[0], &tm);
-        if (count != 0)
-        {
+        if (count != 0) {
             buffer.resize(start + count);
             break;
         }
-        if (size >= format.size() * 256)
-        {
+        if (size >= format.size() * 256) {
             // If the buffer is 256 times larger than the format string, assume
             // that `strftime` gives an empty result. There doesn't seem to be a
             // better way to distinguish the two cases:
@@ -53,6 +47,6 @@ void format(BasicFormatter<char, ArgFormatter> &f,
     }
     format_str = end + 1;
 }
-}
+} // namespace fmt
 
-#endif  // FMT_TIME_H_
+#endif // FMT_TIME_H_
