@@ -9,46 +9,35 @@
 
 #include <spdlog/sinks/sink.h>
 
+#include <android/log.h>
 #include <mutex>
 #include <string>
-#include <android/log.h>
 
-namespace spdlog
-{
-namespace sinks
-{
+namespace spdlog {
+namespace sinks {
 
 /*
-* Android sink (logging using __android_log_write)
-* __android_log_write is thread-safe. No lock is needed.
-*/
-class android_sink : public sink
-{
+ * Android sink (logging using __android_log_write)
+ * __android_log_write is thread-safe. No lock is needed.
+ */
+class android_sink : public sink {
 public:
-    explicit android_sink(const std::string& tag = "spdlog"): _tag(tag) {}
+    explicit android_sink(const std::string &tag = "spdlog") : _tag(tag) {}
 
-    void log(const details::log_msg& msg) override
-    {
+    void log(const details::log_msg &msg) override {
         const android_LogPriority priority = convert_to_android(msg.level);
         // See system/core/liblog/logger_write.c for explanation of return value
-        const int ret = __android_log_write(
-                            priority, _tag.c_str(), msg.formatted.c_str()
-                        );
-        if (ret < 0)
-        {
+        const int ret = __android_log_write(priority, _tag.c_str(), msg.formatted.c_str());
+        if (ret < 0) {
             throw spdlog_ex("__android_log_write() failed", ret);
         }
     }
 
-    void flush() override
-    {
-    }
+    void flush() override {}
 
 private:
-    static android_LogPriority convert_to_android(spdlog::level::level_enum level)
-    {
-        switch(level)
-        {
+    static android_LogPriority convert_to_android(spdlog::level::level_enum level) {
+        switch (level) {
         case spdlog::level::trace:
             return ANDROID_LOG_VERBOSE;
         case spdlog::level::debug:
@@ -69,7 +58,7 @@ private:
     std::string _tag;
 };
 
-}
-}
+} // namespace sinks
+} // namespace spdlog
 
 #endif

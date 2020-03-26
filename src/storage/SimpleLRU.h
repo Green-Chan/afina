@@ -54,13 +54,13 @@ private:
         std::string value;
         lru_node *prev;
         std::unique_ptr<lru_node> next;
-        lru_node(const std::string& key) : key(key) {}
+        lru_node(const std::string &key) : key(key) {}
     };
 
     // Maximum number of bytes could be stored in this cache.
     // i.e all (keys+values) must be less the _max_size
     std::size_t _max_size;
-    
+
     // Number of bytes storing in the cache
     std::size_t _curr_size = 0;
 
@@ -71,14 +71,15 @@ private:
     std::unique_ptr<lru_node> _lru_head;
 
     // Index of nodes from list above, allows fast random access to elements by lru_node#key
-    std::map<std::reference_wrapper<const std::string>, std::reference_wrapper<lru_node>, std::less<std::string>> _lru_index;
-    
+    std::map<std::reference_wrapper<const std::string>, std::reference_wrapper<lru_node>, std::less<std::string>>
+        _lru_index;
+
     // Moves node to the head of the list
     void to_head(lru_node *node_ptr);
-    
+
     // Updates existing association. Call only when it could be updated
     void set(lru_node *node_ptr, const std::string &value);
-    
+
     // Stores new association. Call only when it is new could be stored
     void put(const std::string &key, const std::string &value);
 };

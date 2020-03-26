@@ -1,23 +1,21 @@
 /*
-* This content is released under the MIT License as specified in https://raw.githubusercontent.com/gabime/spdlog/master/LICENSE
-*/
+ * This content is released under the MIT License as specified in
+ * https://raw.githubusercontent.com/gabime/spdlog/master/LICENSE
+ */
 #include "includes.h"
 
 using namespace spdlog::details;
 
 static const std::string target_filename = "logs/file_helper_test.txt";
 
-static void write_with_helper(file_helper &helper, size_t howmany)
-{
+static void write_with_helper(file_helper &helper, size_t howmany) {
     log_msg msg;
     msg.formatted << std::string(howmany, '1');
     helper.write(msg);
     helper.flush();
 }
 
-
-TEST_CASE("file_helper_filename", "[file_helper::filename()]]")
-{
+TEST_CASE("file_helper_filename", "[file_helper::filename()]]") {
     prepare_logdir();
 
     file_helper helper;
@@ -25,10 +23,7 @@ TEST_CASE("file_helper_filename", "[file_helper::filename()]]")
     REQUIRE(helper.filename() == target_filename);
 }
 
-
-
-TEST_CASE("file_helper_size", "[file_helper::size()]]")
-{
+TEST_CASE("file_helper_size", "[file_helper::size()]]") {
     prepare_logdir();
     size_t expected_size = 123;
     {
@@ -40,9 +35,7 @@ TEST_CASE("file_helper_size", "[file_helper::size()]]")
     REQUIRE(get_filesize(target_filename) == expected_size);
 }
 
-
-TEST_CASE("file_helper_exists", "[file_helper::file_exists()]]")
-{
+TEST_CASE("file_helper_exists", "[file_helper::file_exists()]]") {
     prepare_logdir();
     REQUIRE(!file_helper::file_exists(target_filename));
     file_helper helper;
@@ -50,8 +43,7 @@ TEST_CASE("file_helper_exists", "[file_helper::file_exists()]]")
     REQUIRE(file_helper::file_exists(target_filename));
 }
 
-TEST_CASE("file_helper_reopen", "[file_helper::reopen()]]")
-{
+TEST_CASE("file_helper_reopen", "[file_helper::reopen()]]") {
     prepare_logdir();
     file_helper helper;
     helper.open(target_filename);
@@ -61,8 +53,7 @@ TEST_CASE("file_helper_reopen", "[file_helper::reopen()]]")
     REQUIRE(helper.size() == 0);
 }
 
-TEST_CASE("file_helper_reopen2", "[file_helper::reopen(false)]]")
-{
+TEST_CASE("file_helper_reopen2", "[file_helper::reopen(false)]]") {
     prepare_logdir();
     size_t expected_size = 14;
     file_helper helper;
@@ -72,7 +63,3 @@ TEST_CASE("file_helper_reopen2", "[file_helper::reopen(false)]]")
     helper.reopen(false);
     REQUIRE(helper.size() == expected_size);
 }
-
-
-
-
