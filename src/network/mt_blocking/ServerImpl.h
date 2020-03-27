@@ -57,11 +57,7 @@ private:
     // Thread to run network on
     std::thread _thread;
 
-    uint32_t cnt_workers;
     uint32_t max_workers;
-    std::mutex workers_mutex;
-
-    std::condition_variable workers_finished;
 };
 
 } // namespace MTblocking

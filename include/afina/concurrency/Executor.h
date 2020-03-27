@@ -1,6 +1,9 @@
 #ifndef AFINA_CONCURRENCY_EXECUTOR_H
 #define AFINA_CONCURRENCY_EXECUTOR_H
 
+#include <atomic>
+#include <cassert>
+#include <chrono>
 #include <condition_variable>
 #include <functional>
 #include <memory>
@@ -24,12 +27,25 @@ class Executor {
         // completed as requested
         kStopping,
 
-        // Threadppol is stopped
+        // Threadpool is stopped
         kStopped
     };
 
-    Executor(std::string name, int size);
-    ~Executor();
+public:
+    Executor(std::size_t low_watermark, std::size_t hight_watermark, std::size_t max_queue_size,
+             std::chrono::milliseconds idle_time)
+        : low_watermark(low_watermark), hight_watermark(hight_watermark), max_queue_size(max_queue_size),
+          idle_time(idle_time) {
+        std::unique_lock<std::mutex> lock(mutex);
+        for (size_t i = 0; i < low_watermark; i++) {
+            std::thread new_thread(&Executor::perform, this, false);
+            new_thread.detach();
+        }
+        threads_cnt = low_watermark;
+        free_threads = low_watermark;
+        state = State::kRun;
+    }
+    ~Executor() { Stop(); }
 
     /**
      * Signal thread pool to stop, it will stop accepting new jobs and close threads just after each become
@@ -37,7 +53,20 @@ class Executor {
      *
      * In case if await flag is true, call won't return until all background jobs are done and all threads are stopped
      */
-    void Stop(bool await = false);
+    void Stop(bool await = false) {
+        std::unique_lock<std::mutex> lock(this->mutex);
+        state = State::kStopping;
+        if (threads_cnt) {
+            empty_condition.notify_all();
+        } else {
+            state = State::kStopped;
+        }
+        if (await) {
+            while (state != State::kStopped) {
+                stop_condition.wait(lock);
+            }
+        }
+    }
 
     /**
      * Add function to be executed on the threadpool. Method returns true in case if task has been placed
@@ -51,13 +80,22 @@ class Executor {
         auto exec = std::bind(std::forward<F>(func), std::forward<Types>(args)...);
 
         std::unique_lock<std::mutex> lock(this->mutex);
-        if (state != State::kRun) {
+        if (state != State::kRun || tasks.size() >= max_queue_size) {
             return false;
         }
 
         // Enqueue new task
         tasks.push_back(exec);
-        empty_condition.notify_one();
+        if (free_threads) {
+            empty_condition.notify_one();
+        } else {
+            if (threads_cnt < hight_watermark) {
+                threads_cnt++;
+                lock.unlock();
+                std::thread new_thread(&Executor::perform, this, true);
+                new_thread.detach();
+            }
+        }
         return true;
     }
 
@@ -71,7 +109,65 @@ private:
     /**
      * Main function that all pool threads are running. It polls internal task queue and execute tasks
      */
-    friend void perform(Executor *executor);
+    void perform(bool not_free) {
+        std::unique_lock<std::mutex> lock(mutex);
+        if (not_free) {
+            free_threads++;
+        }
+        while (true) {
+            if (tasks.empty()) {
+                empty_condition.wait_for(lock, idle_time);
+                if (tasks.empty()) {
+                    if (state == State::kStopping) {
+                        if (--threads_cnt == 0) {
+                            state = State::kStopped;
+                            stop_condition.notify_one();
+                        }
+                        free_threads--;
+                        return;
+                    }
+                    if (threads_cnt == low_watermark) {
+                        while (true) {
+                            assert(threads_cnt == low_watermark);
+                            empty_condition.wait(lock);
+                            if (tasks.empty()) {
+                                if (state == State::kStopping) {
+                                    if (--threads_cnt == 0) {
+                                        state = State::kStopped;
+                                        stop_condition.notify_one();
+                                    }
+                                    free_threads--;
+                                    return;
+                                }
+                            } else {
+                                break;
+                            }
+                        }
+                    } else {
+                        if (state == State::kStopping) {
+                            if (--threads_cnt == 0) {
+                                state = State::kStopped;
+                                stop_condition.notify_one();
+                            }
+                        }
+                        threads_cnt--;
+                        free_threads--;
+                        return;
+                    }
+                }
+            }
+            auto task = tasks.front();
+            tasks.pop_front();
+            free_threads--;
+            lock.unlock();
+            task();
+            lock.lock();
+            free_threads++;
+        }
+    }
+
+    const std::size_t low_watermark, hight_watermark, max_queue_size;
+    const std::chrono::milliseconds idle_time;
 
     /**
      * Mutex to protect state below from concurrent modification
@@ -83,10 +179,8 @@ private:
      */
     std::condition_variable empty_condition;
 
-    /**
-     * Vector of actual threads that perorm execution
-     */
-    std::vector<std::thread> threads;
+    // Conditional variable to wait until all threads are stopped
+    std::condition_variable stop_condition;
 
     /**
      * Task queue
@@ -97,6 +191,8 @@ private:
      * Flag to stop bg threads
      */
     State state;
+
+    std::size_t threads_cnt, free_threads;
 };
 
 } // namespace Concurrency

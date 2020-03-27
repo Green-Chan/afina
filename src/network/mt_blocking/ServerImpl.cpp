@@ -18,6 +18,7 @@
 #include <spdlog/logger.h>
 
 #include <afina/Storage.h>
+#include <afina/concurrency/Executor.h>
 #include <afina/execute/Command.h>
 #include <afina/logging/Service.h>
 
@@ -39,7 +40,6 @@ void ServerImpl::Start(uint16_t port, uint32_t n_accept, uint32_t n_workers) {
     _logger->info("Start mt_blocking network service");
 
     max_workers = n_workers;
-    cnt_workers = 0;
 
     sigset_t sig_mask;
     sigemptyset(&sig_mask);
@@ -94,6 +94,7 @@ void ServerImpl::Join() {
 
 // See Server.h
 void ServerImpl::OnRun() {
+    Afina::Concurrency::Executor executor(1, max_workers, 3, std::chrono::milliseconds(5000));
     while (running.load()) {
         _logger->debug("waiting for connection...");
 
@@ -136,24 +137,17 @@ void ServerImpl::OnRun() {
             close(client_socket);
         }
         */
-        std::unique_lock<std::mutex> _lock(workers_mutex);
-        if (cnt_workers < max_workers) {
-            cnt_workers++;
-            _lock.unlock();
-            std::thread new_worker(&ServerImpl::Worker, this, client_socket);
-            new_worker.detach();
-        } else {
-            _lock.unlock();
+        if (!executor.Execute(&ServerImpl::Worker, this, client_socket)) {
+            static const std::string msg = "Server is overload";
+            if (send(client_socket, msg.data(), msg.size(), 0) <= 0) {
+                _logger->error("Failed to write response to client: {}", strerror(errno));
+            }
+            close(client_socket);
         }
     }
 
     // Cleanup on exit...
-    {
-        std::unique_lock<std::mutex> _lock(workers_mutex);
-        while (cnt_workers) {
-            workers_finished.wait(_lock);
-        }
-    }
+    executor.Stop(true);
     _logger->warn("Network stopped");
 }
 
@@ -262,12 +256,6 @@ void ServerImpl::Worker(int client_socket) {
 
     // We are done with this connection
     close(client_socket);
-
-    std::unique_lock<std::mutex> _lock(workers_mutex);
-    cnt_workers--;
-    if (!running && !cnt_workers) {
-        workers_finished.notify_one();
-    }
 }
 
 } // namespace MTblocking
