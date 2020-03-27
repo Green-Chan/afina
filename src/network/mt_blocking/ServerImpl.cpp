@@ -126,16 +126,6 @@ void ServerImpl::OnRun() {
             setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
         }
 
-        /*
-        // TODO: Start new thread and process data from/to connection
-        {
-            static const std::string msg = "TODO: start new thread and process memcached protocol instead";
-            if (send(client_socket, msg.data(), msg.size(), 0) <= 0) {
-                _logger->error("Failed to write response to client: {}", strerror(errno));
-            }
-            close(client_socket);
-        }
-        */
         std::unique_lock<std::mutex> _lock(workers_mutex);
         if (cnt_workers < max_workers) {
             cnt_workers++;
@@ -144,6 +134,11 @@ void ServerImpl::OnRun() {
             new_worker.detach();
         } else {
             _lock.unlock();
+            static const std::string msg = "Server is overload";
+            if (send(client_socket, msg.data(), msg.size(), 0) <= 0) {
+                _logger->error("Failed to write response to client: {}", strerror(errno));
+            }
+            close(client_socket);
         }
     }
 
