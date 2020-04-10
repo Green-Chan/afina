@@ -143,9 +143,19 @@ void ServerImpl::OnRun() {
 
             auto old_mask = pc->_event.events;
             if ((current_event.events & EPOLLERR) || (current_event.events & EPOLLHUP)) {
+                _logger->error("Error on socket {}", pc->_socket);
+                if (epoll_ctl(epoll_descr, EPOLL_CTL_DEL, pc->_socket, &pc->_event)) {
+                    _logger->error("Failed to delete connection from epoll");
+                }
+
+                close(pc->_socket);
                 pc->OnError();
+
+                delete pc;
+                continue;
             } else if (current_event.events & EPOLLRDHUP) {
-                pc->OnClose();
+                _logger->debug("Epollhub");
+                pc->Close();
             } else {
                 // Depends on what connection wants...
                 if (current_event.events & EPOLLIN) {
@@ -207,7 +217,7 @@ void ServerImpl::OnNewConnection(int epoll_descr) {
         }
 
         // Register the new FD to be monitored by epoll.
-        Connection *pc = new (std::nothrow) Connection(infd);
+        Connection *pc = new (std::nothrow) Connection(infd, pStorage);
         if (pc == nullptr) {
             throw std::runtime_error("Failed to allocate connection");
         }

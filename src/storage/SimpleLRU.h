@@ -48,15 +48,6 @@ public:
     bool Get(const std::string &key, std::string &value) override;
 
 private:
-    // Moves node to the head of the list
-    void to_head(lru_node *node_ptr);
-
-    // Updates existing association. Call only when it could be updated
-    void set(lru_node *node_ptr, const std::string &value);
-
-    // Stores new association. Call only when it is new could be stored
-    void put(const std::string &key, const std::string &value);
-
     // LRU cache node
     using lru_node = struct lru_node {
         const std::string key;
@@ -65,6 +56,15 @@ private:
         std::unique_ptr<lru_node> next;
         lru_node(const std::string &key) : key(key) {}
     };
+
+    // Moves node to the head of the list
+    void to_head(lru_node *node_ptr);
+
+    // Updates existing association. Call only when it could be updated
+    void set(lru_node *node_ptr, const std::string &value);
+
+    // Stores new association. Call only when it is new could be stored
+    void put(const std::string &key, const std::string &value);
 
     // Maximum number of bytes could be stored in this cache.
     // i.e all (keys+values) must be less the _max_size
