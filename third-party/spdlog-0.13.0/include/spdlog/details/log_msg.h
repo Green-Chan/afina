@@ -8,19 +8,14 @@
 #include <spdlog/common.h>
 #include <spdlog/details/os.h>
 
-
 #include <string>
 #include <utility>
 
-namespace spdlog
-{
-namespace details
-{
-struct log_msg
-{
+namespace spdlog {
+namespace details {
+struct log_msg {
     log_msg() = default;
-    log_msg(const std::string *loggers_name, level::level_enum lvl) : logger_name(loggers_name), level(lvl)
-    {
+    log_msg(const std::string *loggers_name, level::level_enum lvl) : logger_name(loggers_name), level(lvl) {
 #ifndef SPDLOG_NO_DATETIME
         time = os::now();
 #endif
@@ -30,10 +25,9 @@ struct log_msg
 #endif
     }
 
-    log_msg(const log_msg& other)  = delete;
-    log_msg& operator=(log_msg&& other) = delete;
-    log_msg(log_msg&& other) = delete;
-
+    log_msg(const log_msg &other) = delete;
+    log_msg &operator=(log_msg &&other) = delete;
+    log_msg(log_msg &&other) = delete;
 
     const std::string *logger_name;
     level::level_enum level;
@@ -42,5 +36,5 @@ struct log_msg
     fmt::MemoryWriter raw;
     fmt::MemoryWriter formatted;
 };
-}
-}
+} // namespace details
+} // namespace spdlog
