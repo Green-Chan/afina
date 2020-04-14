@@ -29,7 +29,6 @@ public:
             }
             _lru_head.reset();
         }
-        //_lru_head.reset(); // TODO: Here is stack overflow
     }
 
     // Implements Afina::Storage interface
