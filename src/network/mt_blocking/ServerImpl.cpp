@@ -129,6 +129,7 @@ void ServerImpl::OnRun() {
         std::unique_lock<std::mutex> _lock(workers_mutex);
         if (cnt_workers < max_workers) {
             cnt_workers++;
+            _sockets.insert(client_socket);
             _lock.unlock();
             std::thread new_worker(&ServerImpl::Worker, this, client_socket);
             new_worker.detach();
@@ -145,6 +146,9 @@ void ServerImpl::OnRun() {
     // Cleanup on exit...
     {
         std::unique_lock<std::mutex> _lock(workers_mutex);
+        for (auto socket : _sockets) {
+            shutdown(socket, SHUT_RD);
+        }
         while (cnt_workers) {
             workers_finished.wait(_lock);
         }
@@ -222,6 +226,10 @@ void ServerImpl::Worker(int client_socket) {
                 if (command_to_execute && arg_remains == 0) {
                     _logger->debug("Start command execution");
 
+                    if (argument_for_command.size() > 0) {
+                        assert(argument_for_command.size() > 2);
+                        argument_for_command.resize(argument_for_command.size() - 2);
+                    }
                     std::string result;
                     command_to_execute->Execute(*pStorage, argument_for_command, result);
 
@@ -259,6 +267,7 @@ void ServerImpl::Worker(int client_socket) {
     close(client_socket);
 
     std::unique_lock<std::mutex> _lock(workers_mutex);
+    _sockets.erase(client_socket);
     cnt_workers--;
     if (!running && !cnt_workers) {
         workers_finished.notify_one();
