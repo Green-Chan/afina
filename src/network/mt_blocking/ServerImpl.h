@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <thread>
+#include <unordered_set>
 
 #include <afina/network/Server.h>
 
@@ -58,6 +59,9 @@ private:
     std::thread _thread;
 
     uint32_t max_workers;
+
+    std::mutex sockets_mutex;
+    std::unordered_set<int> _sockets;
 };
 
 } // namespace MTblocking

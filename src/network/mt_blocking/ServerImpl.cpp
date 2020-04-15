@@ -126,17 +126,10 @@ void ServerImpl::OnRun() {
             tv.tv_usec = 0;
             setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
         }
-
-        /*
-        // TODO: Start new thread and process data from/to connection
         {
-            static const std::string msg = "TODO: start new thread and process memcached protocol instead";
-            if (send(client_socket, msg.data(), msg.size(), 0) <= 0) {
-                _logger->error("Failed to write response to client: {}", strerror(errno));
-            }
-            close(client_socket);
+            std::unique_lock<std::mutex> _lock(sockets_mutex);
+            _sockets.insert(client_socket);
         }
-        */
         if (!executor.Execute(&ServerImpl::Worker, this, client_socket)) {
             static const std::string msg = "Server is overload";
             if (send(client_socket, msg.data(), msg.size(), 0) <= 0) {
@@ -147,6 +140,12 @@ void ServerImpl::OnRun() {
     }
 
     // Cleanup on exit...
+    {
+        std::unique_lock<std::mutex> _lock(sockets_mutex);
+        for (auto socket : _sockets) {
+            shutdown(socket, SHUT_RD);
+        }
+    }
     executor.Stop(true);
     _logger->warn("Network stopped");
 }
@@ -221,6 +220,10 @@ void ServerImpl::Worker(int client_socket) {
                 if (command_to_execute && arg_remains == 0) {
                     _logger->debug("Start command execution");
 
+                    if (argument_for_command.size() > 0) {
+                        assert(argument_for_command.size() > 2);
+                        argument_for_command.resize(argument_for_command.size() - 2);
+                    }
                     std::string result;
                     command_to_execute->Execute(*pStorage, argument_for_command, result);
 
@@ -256,6 +259,9 @@ void ServerImpl::Worker(int client_socket) {
 
     // We are done with this connection
     close(client_socket);
+
+    std::unique_lock<std::mutex> _lock(sockets_mutex);
+    _sockets.erase(client_socket);
 }
 
 } // namespace MTblocking
