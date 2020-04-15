@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <thread>
+#include <unordered_set>
 
 #include <afina/network/Server.h>
 
@@ -62,6 +63,8 @@ private:
     std::mutex workers_mutex;
 
     std::condition_variable workers_finished;
+
+    std::unordered_set<int> _sockets;
 };
 
 } // namespace MTblocking
