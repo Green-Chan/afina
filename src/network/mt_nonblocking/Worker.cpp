@@ -57,7 +57,7 @@ void Worker::Start(int epoll_fd) {
 }
 
 // See Worker.h
-void Worker::Stop() { isRunning = false; }
+void Worker::Stop() { isRunning.store(false); }
 
 // See Worker.h
 void Worker::Join() {
@@ -76,7 +76,7 @@ void Worker::OnRun() {
     // for events to avoid thundering herd type behavior.
     int timeout = -1;
     std::array<struct epoll_event, 64> mod_list;
-    while (isRunning) {
+    while (isRunning.load()) {
         int nmod = epoll_wait(_epoll_fd, &mod_list[0], mod_list.size(), timeout);
         _logger->debug("Worker wokeup: {} events", nmod);
 
@@ -93,19 +93,29 @@ void Worker::OnRun() {
             // Some connection gets new data
             Connection *pconn = static_cast<Connection *>(current_event.data.ptr);
             if ((current_event.events & EPOLLERR) || (current_event.events & EPOLLHUP)) {
-                _logger->debug("Got EPOLLERR or EPOLLHUP, value of returned events: {}", current_event.events);
+                _logger->error("Error on socket {}", pconn->_socket);
+                if (epoll_ctl(_epoll_fd, EPOLL_CTL_DEL, pconn->_socket, &pconn->_event)) {
+                    _logger->error("Failed to delete connection from epoll");
+                }
+
+                close(pconn->_socket);
                 pconn->OnError();
+
+                delete pconn;
+                continue;
             } else if (current_event.events & EPOLLRDHUP) {
                 _logger->debug("Got EPOLLRDHUP, value of returned events: {}", current_event.events);
-                pconn->OnClose();
+                pconn->Close();
             } else {
                 // Depends on what connection wants...
                 if (current_event.events & EPOLLIN) {
                     _logger->trace("Got EPOLLIN");
+                    _logger->debug("Got EPOLLIN on socket {}", pconn->_socket);
                     pconn->DoRead();
                 }
                 if (current_event.events & EPOLLOUT) {
                     _logger->trace("Got EPOLLOUT");
+                    _logger->debug("Got EPOLLOUT on socket {}", pconn->_socket);
                     pconn->DoWrite();
                 }
             }
@@ -125,6 +135,8 @@ void Worker::OnRun() {
                 if (epoll_ctl(_epoll_fd, EPOLL_CTL_DEL, pconn->_socket, &pconn->_event)) {
                     std::cerr << "Failed to delete connection!" << std::endl;
                 }
+                close(pconn->_socket);
+                pconn->OnClose();
                 delete pconn;
             }
         }
