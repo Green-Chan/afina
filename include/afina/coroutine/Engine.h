@@ -31,7 +31,7 @@ private:
         char *Low = nullptr;
 
         // coroutine stack end address
-        char *Hight = nullptr;
+        char *High = nullptr;
 
         // coroutine stack copy buffer
         std::tuple<char *, uint32_t> Stack = std::make_tuple(nullptr, 0);
@@ -58,6 +58,11 @@ private:
      * List of routines ready to be scheduled. Note that suspended routine ends up here as well
      */
     context *alive;
+    
+    /**
+     * List of corountines that sleep and can't be executed
+     */
+    context *blocked;
 
     /**
      * List of corountines that sleep and can't be executed
@@ -68,6 +73,20 @@ private:
      * Context to be returned finally
      */
     context *idle_ctx;
+    
+    /**
+     * True if stack grows upwards, false if it grows downwards
+     */ 
+    bool grows_upwards;
+    
+    void set_grows_upwards();
+    
+    
+    typedef void (*unblock_func)(Engine &);
+    /**
+     * Call when all coroutines are blocked
+     */
+    unblock_func _unblock;
 
     /**
      * Call when all coroutines are blocked
@@ -85,11 +104,14 @@ protected:
      */
     void Restore(context &ctx);
 
-    static void null_unblocker(Engine &) {}
+    static void no_unblock(Engine &) {}
 
 public:
-    Engine(unblocker_func unblocker = null_unblocker)
-        : StackBottom(0), cur_routine(nullptr), alive(nullptr), _unblocker(unblocker) {}
+    Engine(unblock_func _unblock = no_unblock)
+		: StackBottom(0), cur_routine(nullptr), alive(nullptr), blocked(nullptr), _unblock(_unblock) {
+		set_grows_upwards();
+	}
+
     Engine(Engine &&) = delete;
     Engine(const Engine &) = delete;
 
@@ -112,6 +134,18 @@ public:
      */
     void sched(void *routine);
 
+	/**
+     * Put coroutine to sleep.
+     * If it was current coroutine, then do yield to select new one to be run instead. If argument is nullptr
+     * then block current coroutine
+     */
+    void block(void *coro);
+
+    /**
+     * Put coroutine back to list of alive, so that it could be scheduled later
+     */
+    void unblock(void *coro);
+    
     /**
      * Blocks current routine so that is can't be scheduled anymore
      * If it was a currently running corountine, then do yield to select new one to be run instead.
@@ -142,11 +176,15 @@ public:
 
         // Start routine execution
         void *pc = run(main, std::forward<Ta>(args)...);
-
         idle_ctx = new context();
+        if (grows_upwards) {
+			idle_ctx->Low = StackBottom;
+		} else {
+			idle_ctx->High = StackBottom + 1;
+		}
         if (setjmp(idle_ctx->Environment) > 0) {
             if (alive == nullptr) {
-                _unblocker(*this);
+                _unblock(*this);
             }
 
             // Here: correct finish of the coroutine section
@@ -170,9 +208,16 @@ public:
             // Engine wasn't initialized yet
             return nullptr;
         }
+        
+        char CoroStackStart;
 
         // New coroutine context that carries around all information enough to call function
         context *pc = new context();
+        if (grows_upwards) {
+			pc->Low = &CoroStackStart;
+		} else {
+			pc->High = &CoroStackStart + 1;
+		}
 
         // Store current state right here, i.e just before enter new coroutine, later, once it gets scheduled
         // execution starts here. Note that we have to acquire stack of the current function call to ensure
@@ -198,12 +243,13 @@ public:
 
             if (alive == cur_routine) {
                 alive = alive->next;
+                alive->prev = nullptr;
             }
 
             // current coroutine finished, and the pointer is not relevant now
             cur_routine = nullptr;
             pc->prev = pc->next = nullptr;
-            delete std::get<0>(pc->Stack);
+            delete[] std::get<0>(pc->Stack);
             delete pc;
 
             // We cannot return here, as this function "returned" once already, so here we must select some other
