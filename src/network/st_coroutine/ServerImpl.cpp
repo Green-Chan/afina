@@ -2,9 +2,11 @@
 
 #include <cassert>
 #include <cstring>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
+#include <unordered_map>
 
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -29,7 +31,11 @@ namespace Network {
 namespace STcoroutine {
 
 // See Server.h
-ServerImpl::ServerImpl(std::shared_ptr<Afina::Storage> ps, std::shared_ptr<Logging::Service> pl) : Server(ps, pl) {}
+ServerImpl::ServerImpl(std::shared_ptr<Afina::Storage> ps, std::shared_ptr<Logging::Service> pl) : Server(ps, pl) {
+    // engine = std::make_shared<Afina::Coroutine::Engine>(&ServerImpl::Unblock);
+    engine = std::make_shared<Afina::Coroutine::Engine>(static_cast<std::function<void(Afina::Coroutine::Engine &)>>(
+        std::bind(&ServerImpl::Unblock, this, std::placeholders::_1)));
+}
 
 // See Server.h
 ServerImpl::~ServerImpl() {}
@@ -37,7 +43,7 @@ ServerImpl::~ServerImpl() {}
 // See Server.h
 void ServerImpl::Start(uint16_t port, uint32_t n_acceptors, uint32_t n_workers) {
     _logger = pLogging->select("network");
-    _logger->info("Start st_nonblocking network service");
+    _logger->info("Start st_coroutine network service");
 
     sigset_t sig_mask;
     sigemptyset(&sig_mask);
@@ -94,36 +100,33 @@ void ServerImpl::Stop() {
 }
 
 // See Server.h
-void ServerImpl::Join() {
-    // Wait for work to be complete
-    _work_thread.join();
-}
+void ServerImpl::Unblock(Afina::Coroutine::Engine &eng) {
+    static bool run = true;
+    static std::unordered_map<Connection *, uint32_t> old_connections{};
 
-// See ServerImpl.h
-void ServerImpl::OnRun() {
-    _logger->info("Start acceptor");
-    int epoll_descr = epoll_create1(0);
-    if (epoll_descr == -1) {
-        throw std::runtime_error("Failed to create epoll file descriptor: " + std::string(strerror(errno)));
+    for (auto it = old_connections.begin(); it != old_connections.end(); it++) {
+        auto pc = it->first;
+        // Does it alive?
+        if (!pc->isAlive()) {
+            if (epoll_ctl(epoll_descr, EPOLL_CTL_DEL, pc->_socket, &pc->_event)) {
+                _logger->error("Failed to delete connection from epoll");
+            }
+
+            close(pc->_socket);
+            pc->Unblock(Connection::EventType::on_close);
+        } else if (pc->_event.events != it->second) {
+            if (epoll_ctl(epoll_descr, EPOLL_CTL_MOD, pc->_socket, &pc->_event)) {
+                _logger->error("Failed to change connection event mask");
+
+                close(pc->_socket);
+                pc->Unblock(Connection::EventType::on_close);
+            }
+        }
     }
+    old_connections.clear();
 
-    struct epoll_event event;
-    event.events = EPOLLIN;
-    event.data.fd = _server_socket;
-    if (epoll_ctl(epoll_descr, EPOLL_CTL_ADD, _server_socket, &event)) {
-        throw std::runtime_error("Failed to add file descriptor to epoll");
-    }
-
-    struct epoll_event event2;
-    event2.events = EPOLLIN;
-    event2.data.fd = _event_fd;
-    if (epoll_ctl(epoll_descr, EPOLL_CTL_ADD, _event_fd, &event2)) {
-        throw std::runtime_error("Failed to add file descriptor to epoll");
-    }
-
-    bool run = true;
     std::array<struct epoll_event, 64> mod_list;
-    while (run) {
+    if (run) {
         int nmod = epoll_wait(epoll_descr, &mod_list[0], mod_list.size(), -1);
         _logger->debug("Acceptor wokeup: {} events", nmod);
 
@@ -141,44 +144,69 @@ void ServerImpl::OnRun() {
             // That is some connection!
             Connection *pc = static_cast<Connection *>(current_event.data.ptr);
 
-            auto old_mask = pc->_event.events;
             if ((current_event.events & EPOLLERR) || (current_event.events & EPOLLHUP)) {
-                pc->OnError();
-            } else if (current_event.events & EPOLLRDHUP) {
-                pc->OnClose();
-            } else {
-                // Depends on what connection wants...
-                if (current_event.events & EPOLLIN) {
-                    pc->DoRead();
-                }
-                if (current_event.events & EPOLLOUT) {
-                    pc->DoWrite();
-                }
-            }
-
-            // Does it alive?
-            if (!pc->isAlive()) {
+                _logger->error("Error on socket {}", pc->_socket);
                 if (epoll_ctl(epoll_descr, EPOLL_CTL_DEL, pc->_socket, &pc->_event)) {
                     _logger->error("Failed to delete connection from epoll");
                 }
 
                 close(pc->_socket);
-                pc->OnClose();
-
-                delete pc;
-            } else if (pc->_event.events != old_mask) {
-                if (epoll_ctl(epoll_descr, EPOLL_CTL_MOD, pc->_socket, &pc->_event)) {
-                    _logger->error("Failed to change connection event mask");
-
-                    close(pc->_socket);
-                    pc->OnClose();
-
-                    delete pc;
+                pc->Unblock(Connection::EventType::on_error);
+                continue;
+            } else {
+                old_connections[pc] = pc->_event.events;
+                if (current_event.events & EPOLLRDHUP) {
+                    _logger->debug("Epollhub");
+                    pc->Unblock(Connection::EventType::close);
+                } else {
+                    // Depends on what connection wants...
+                    if (current_event.events & EPOLLIN) {
+                        pc->Unblock(Connection::EventType::do_read);
+                    }
+                    if (current_event.events & EPOLLOUT) {
+                        pc->Unblock(Connection::EventType::do_write);
+                    }
                 }
             }
         }
+    } else {
+        _logger->warn("Acceptor stopped");
     }
-    _logger->warn("Acceptor stopped");
+}
+
+// See Server.h
+void ServerImpl::Join() {
+    // Wait for work to be complete
+    _work_thread.join();
+}
+
+// See ServerImpl.h
+void ServerImpl::OnRun() {
+    // engine->start(&ServerImpl::Run, this);
+    engine->start(static_cast<void (*)(ServerImpl *)>([](ServerImpl *s) -> void { s->Run(); }), this);
+}
+
+// See ServerImpl.h
+void ServerImpl::Run() {
+    _logger->info("Start acceptor");
+    epoll_descr = epoll_create1(0);
+    if (epoll_descr == -1) {
+        throw std::runtime_error("Failed to create epoll file descriptor: " + std::string(strerror(errno)));
+    }
+
+    struct epoll_event event;
+    event.events = EPOLLIN;
+    event.data.fd = _server_socket;
+    if (epoll_ctl(epoll_descr, EPOLL_CTL_ADD, _server_socket, &event)) {
+        throw std::runtime_error("Failed to add file descriptor to epoll");
+    }
+
+    struct epoll_event event2;
+    event2.events = EPOLLIN;
+    event2.data.fd = _event_fd;
+    if (epoll_ctl(epoll_descr, EPOLL_CTL_ADD, _event_fd, &event2)) {
+        throw std::runtime_error("Failed to add file descriptor to epoll");
+    }
 }
 
 void ServerImpl::OnNewConnection(int epoll_descr) {
@@ -207,7 +235,7 @@ void ServerImpl::OnNewConnection(int epoll_descr) {
         }
 
         // Register the new FD to be monitored by epoll.
-        Connection *pc = new (std::nothrow) Connection(infd);
+        Connection *pc = new (std::nothrow) Connection(infd, pStorage, engine);
         if (pc == nullptr) {
             throw std::runtime_error("Failed to allocate connection");
         }
@@ -216,8 +244,7 @@ void ServerImpl::OnNewConnection(int epoll_descr) {
         pc->Start();
         if (pc->isAlive()) {
             if (epoll_ctl(epoll_descr, EPOLL_CTL_ADD, pc->_socket, &pc->_event)) {
-                pc->OnError();
-                delete pc;
+                pc->Unblock(Connection::EventType::on_error);
             }
         }
     }

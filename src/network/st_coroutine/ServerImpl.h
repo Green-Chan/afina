@@ -4,6 +4,7 @@
 #include <thread>
 #include <vector>
 
+#include <afina/coroutine/Engine.h>
 #include <afina/network/Server.h>
 
 namespace spdlog {
@@ -37,7 +38,9 @@ public:
 
 protected:
     void OnRun();
+    void Run();
     void OnNewConnection(int);
+    void Unblock(Afina::Coroutine::Engine &eng);
 
 private:
     // logger to use
@@ -56,6 +59,11 @@ private:
 
     // IO thread
     std::thread _work_thread;
+
+    // IO coroutines engine
+    std::shared_ptr<Afina::Coroutine::Engine> engine;
+
+    int epoll_descr;
 };
 
 } // namespace STcoroutine

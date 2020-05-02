@@ -1,13 +1,14 @@
 #ifndef AFINA_COROUTINE_ENGINE_H
 #define AFINA_COROUTINE_ENGINE_H
 
+#include <cassert>
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
 #include <iostream>
 #include <map>
-#include <tuple>
-
 #include <setjmp.h>
+#include <tuple>
 
 namespace Afina {
 namespace Coroutine {
@@ -58,11 +59,6 @@ private:
      * List of routines ready to be scheduled. Note that suspended routine ends up here as well
      */
     context *alive;
-    
-    /**
-     * List of corountines that sleep and can't be executed
-     */
-    context *blocked;
 
     /**
      * List of corountines that sleep and can't be executed
@@ -73,25 +69,15 @@ private:
      * Context to be returned finally
      */
     context *idle_ctx;
-    
-    /**
-     * True if stack grows upwards, false if it grows downwards
-     */ 
-    bool grows_upwards;
-    
-    void set_grows_upwards();
-    
-    
-    typedef void (*unblock_func)(Engine &);
-    /**
-     * Call when all coroutines are blocked
-     */
-    unblock_func _unblock;
 
     /**
-     * Call when all coroutines are blocked
+     * True if stack grows upwards, false if it grows downwards
      */
-    unblocker_func _unblocker;
+    bool grows_upwards;
+
+    void set_grows_upwards();
+
+    unblocker_func _unblock;
 
 protected:
     /**
@@ -106,11 +92,80 @@ protected:
 
     static void no_unblock(Engine &) {}
 
+    /**
+     * Register new coroutine. It won't receive control until scheduled explicitely or implicitly. In case of some
+     * errors function returns nullptr. CoroStackBottom
+     */
+    template <typename... Ta> void *run_impl(char *CoroStackBottom, void (*func)(Ta...), Ta &&... args) {
+        // New coroutine context that carries around all information enough to call function
+        context *pc = new context();
+        if (grows_upwards) {
+            pc->Low = StackBottom;
+        } else {
+            pc->High = StackBottom + 1;
+        }
+
+        // Store current state right here, i.e just before enter new coroutine, later, once it gets scheduled
+        // execution starts here. Note that we have to acquire stack of the current function call to ensure
+        // that function parameters will be passed along
+        if (setjmp(pc->Environment) > 0) {
+            // Created routine got control in order to start execution. Note that all variables, such as
+            // context pointer, arguments and a pointer to the function comes from restored stack
+
+            try {
+                // invoke routine
+                func(std::forward<Ta>(args)...);
+            } catch (...) {
+                abort();
+            }
+
+            // Routine has completed its execution, time to delete it. Note that we should be extremely careful in where
+            // to pass control after that. We never want to go backward by stack as that would mean to go backward in
+            // time. Function run() has already return once (when setjmp returns 0), so return second return from run
+            // would looks a bit awkward
+            if (pc->prev != nullptr) {
+                pc->prev->next = pc->next;
+            } else {
+                assert(pc == alive);
+                alive = alive->next;
+            }
+
+            if (pc->next != nullptr) {
+                pc->next->prev = pc->prev;
+            }
+
+            // current coroutine finished, and the pointer is not relevant now
+            cur_routine = nullptr;
+            pc->prev = nullptr;
+            pc->next = nullptr;
+            delete[] std::get<0>(pc->Stack);
+            delete pc;
+
+            // We cannot return here, as this function "returned" once already, so here we must select some other
+            // coroutine to run. As current coroutine is completed and can't be scheduled anymore, it is safe to
+            // just give up and ask scheduler code to select someone else, control will never returns to this one
+            Restore(*idle_ctx);
+        }
+
+        // setjmp remembers position from which routine could starts execution, but to make it correctly
+        // it is neccessary to save arguments, pointer to body function, pointer to context, e.t.c - i.e
+        // save stack.
+        Store(*pc);
+
+        // Add routine as alive double-linked list
+        pc->next = alive;
+        alive = pc;
+        if (pc->next != nullptr) {
+            pc->next->prev = pc;
+        }
+        return pc;
+    }
+
 public:
-    Engine(unblock_func _unblock = no_unblock)
-		: StackBottom(0), cur_routine(nullptr), alive(nullptr), blocked(nullptr), _unblock(_unblock) {
-		set_grows_upwards();
-	}
+    Engine(unblocker_func _unblock = no_unblock)
+        : StackBottom(0), cur_routine(nullptr), alive(nullptr), blocked(nullptr), _unblock(_unblock) {
+        set_grows_upwards();
+    }
 
     Engine(Engine &&) = delete;
     Engine(const Engine &) = delete;
@@ -134,18 +189,6 @@ public:
      */
     void sched(void *routine);
 
-	/**
-     * Put coroutine to sleep.
-     * If it was current coroutine, then do yield to select new one to be run instead. If argument is nullptr
-     * then block current coroutine
-     */
-    void block(void *coro);
-
-    /**
-     * Put coroutine back to list of alive, so that it could be scheduled later
-     */
-    void unblock(void *coro);
-    
     /**
      * Blocks current routine so that is can't be scheduled anymore
      * If it was a currently running corountine, then do yield to select new one to be run instead.
@@ -176,12 +219,13 @@ public:
 
         // Start routine execution
         void *pc = run(main, std::forward<Ta>(args)...);
+
         idle_ctx = new context();
         if (grows_upwards) {
-			idle_ctx->Low = StackBottom;
-		} else {
-			idle_ctx->High = StackBottom + 1;
-		}
+            idle_ctx->Low = StackBottom;
+        } else {
+            idle_ctx->High = StackBottom + 1;
+        }
         if (setjmp(idle_ctx->Environment) > 0) {
             if (alive == nullptr) {
                 _unblock(*this);
@@ -194,6 +238,13 @@ public:
             sched(pc);
         }
 
+        assert(alive == nullptr);
+        while (blocked != nullptr) {
+            auto to_del = blocked;
+            blocked = blocked->next;
+            delete to_del;
+        }
+
         // Shutdown runtime
         delete idle_ctx;
         this->StackBottom = 0;
@@ -201,76 +252,15 @@ public:
 
     /**
      * Register new coroutine. It won't receive control until scheduled explicitely or implicitly. In case of some
-     * errors function returns -1
+     * errors function returns nullptr
      */
     template <typename... Ta> void *run(void (*func)(Ta...), Ta &&... args) {
         if (this->StackBottom == 0) {
             // Engine wasn't initialized yet
             return nullptr;
         }
-        
-        char CoroStackStart;
-
-        // New coroutine context that carries around all information enough to call function
-        context *pc = new context();
-        if (grows_upwards) {
-			pc->Low = &CoroStackStart;
-		} else {
-			pc->High = &CoroStackStart + 1;
-		}
-
-        // Store current state right here, i.e just before enter new coroutine, later, once it gets scheduled
-        // execution starts here. Note that we have to acquire stack of the current function call to ensure
-        // that function parameters will be passed along
-        if (setjmp(pc->Environment) > 0) {
-            // Created routine got control in order to start execution. Note that all variables, such as
-            // context pointer, arguments and a pointer to the function comes from restored stack
-
-            // invoke routine
-            func(std::forward<Ta>(args)...);
-
-            // Routine has completed its execution, time to delete it. Note that we should be extremely careful in where
-            // to pass control after that. We never want to go backward by stack as that would mean to go backward in
-            // time. Function run() has already return once (when setjmp returns 0), so return second return from run
-            // would looks a bit awkward
-            if (pc->prev != nullptr) {
-                pc->prev->next = pc->next;
-            }
-
-            if (pc->next != nullptr) {
-                pc->next->prev = pc->prev;
-            }
-
-            if (alive == cur_routine) {
-                alive = alive->next;
-                alive->prev = nullptr;
-            }
-
-            // current coroutine finished, and the pointer is not relevant now
-            cur_routine = nullptr;
-            pc->prev = pc->next = nullptr;
-            delete[] std::get<0>(pc->Stack);
-            delete pc;
-
-            // We cannot return here, as this function "returned" once already, so here we must select some other
-            // coroutine to run. As current coroutine is completed and can't be scheduled anymore, it is safe to
-            // just give up and ask scheduler code to select someone else, control will never returns to this one
-            Restore(*idle_ctx);
-        }
-
-        // setjmp remembers position from which routine could starts execution, but to make it correctly
-        // it is neccessary to save arguments, pointer to body function, pointer to context, e.t.c - i.e
-        // save stack.
-        Store(*pc);
-
-        // Add routine as alive double-linked list
-        pc->next = alive;
-        alive = pc;
-        if (pc->next != nullptr) {
-            pc->next->prev = pc;
-        }
-
-        return pc;
+        char CoroStackStartsHere;
+        return run_impl(&CoroStackStartsHere, func, std::forward<Ta>(args)...);
     }
 };
 
