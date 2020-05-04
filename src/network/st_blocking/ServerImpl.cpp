@@ -166,21 +166,24 @@ void ServerImpl::OnRun() {
         // - execute each command
         // - send response
         try {
+            int all_readed_bytes = 0;
             int readed_bytes = -1;
             char client_buffer[4096];
-            while ((readed_bytes = read(client_socket, client_buffer, sizeof(client_buffer))) > 0) {
+            while ((readed_bytes = read(client_socket, client_buffer + all_readed_bytes,
+                                        sizeof(client_buffer) - all_readed_bytes)) > 0) {
                 _logger->debug("Got {} bytes from socket", readed_bytes);
+                all_readed_bytes += readed_bytes;
 
                 // Single block of data readed from the socket could trigger inside actions a multiple times,
                 // for example:
                 // - read#0: [<command1 start>]
                 // - read#1: [<command1 end> <argument> <command2> <argument for command 2> <command3> ... ]
-                while (readed_bytes > 0) {
-                    _logger->debug("Process {} bytes", readed_bytes);
+                while (all_readed_bytes > 0) {
+                    _logger->debug("Process {} bytes", all_readed_bytes);
                     // There is no command yet
                     if (!command_to_execute) {
                         std::size_t parsed = 0;
-                        if (parser.Parse(client_buffer, readed_bytes, parsed)) {
+                        if (parser.Parse(client_buffer, all_readed_bytes, parsed)) {
                             // There is no command to be launched, continue to parse input stream
                             // Here we are, current chunk finished some command, process it
                             _logger->debug("Found new command: {} in {} bytes", parser.Name(), parsed);
@@ -195,24 +198,24 @@ void ServerImpl::OnRun() {
                         if (parsed == 0) {
                             break;
                         } else {
-                            std::memmove(client_buffer, client_buffer + parsed, readed_bytes - parsed);
-                            readed_bytes -= parsed;
+                            std::memmove(client_buffer, client_buffer + parsed, all_readed_bytes - parsed);
+                            all_readed_bytes -= parsed;
                         }
                     }
 
                     // There is command, but we still wait for argument to arrive...
                     if (command_to_execute && arg_remains > 0) {
-                        _logger->debug("Fill argument: {} bytes of {}", readed_bytes, arg_remains);
+                        _logger->debug("Fill argument: {} bytes of {}", all_readed_bytes, arg_remains);
                         // There is some parsed command, and now we are reading argument
-                        std::size_t to_read = std::min(arg_remains, std::size_t(readed_bytes));
+                        std::size_t to_read = std::min(arg_remains, std::size_t(all_readed_bytes));
                         argument_for_command.append(client_buffer, to_read);
 
-                        std::memmove(client_buffer, client_buffer + to_read, readed_bytes - to_read);
+                        std::memmove(client_buffer, client_buffer + to_read, all_readed_bytes - to_read);
                         arg_remains -= to_read;
-                        readed_bytes -= to_read;
+                        all_readed_bytes -= to_read;
                     }
 
-                    // Thre is command & argument - RUN!
+                    // There are command & argument - RUN!
                     if (command_to_execute && arg_remains == 0) {
                         _logger->debug("Start command execution");
 
