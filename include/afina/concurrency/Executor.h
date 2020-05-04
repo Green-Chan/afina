@@ -32,13 +32,13 @@ class Executor {
     };
 
 public:
-    Executor(std::size_t low_watermark, std::size_t hight_watermark, std::size_t max_queue_size,
+    Executor(std::size_t low_watermark, std::size_t high_watermark, std::size_t max_queue_size,
              std::chrono::milliseconds idle_time)
-        : low_watermark(low_watermark), hight_watermark(hight_watermark), max_queue_size(max_queue_size),
+        : low_watermark(low_watermark), high_watermark(high_watermark), max_queue_size(max_queue_size),
           idle_time(idle_time) {
         std::unique_lock<std::mutex> lock(mutex);
         for (size_t i = 0; i < low_watermark; i++) {
-            std::thread new_thread(&Executor::perform, this, false);
+            std::thread new_thread(&Executor::perform, this);
             new_thread.detach();
         }
         threads_cnt = low_watermark;
@@ -86,13 +86,14 @@ public:
 
         // Enqueue new task
         tasks.push_back(exec);
-        if (free_threads) {
+        if (free_threads >= tasks.size()) {
             empty_condition.notify_one();
         } else {
-            if (threads_cnt < hight_watermark) {
+            if (threads_cnt < high_watermark) {
                 threads_cnt++;
+                free_threads++;
                 lock.unlock();
-                std::thread new_thread(&Executor::perform, this, true);
+                std::thread new_thread(&Executor::perform, this);
                 new_thread.detach();
             }
         }
@@ -109,53 +110,31 @@ private:
     /**
      * Main function that all pool threads are running. It polls internal task queue and execute tasks
      */
-    void perform(bool not_free) {
+    void perform() {
         std::unique_lock<std::mutex> lock(mutex);
-        if (not_free) {
-            free_threads++;
-        }
         while (true) {
             if (tasks.empty()) {
+                if (state == State::kStopping) {
+                    // Stopping (after while)
+                    break;
+                }
                 empty_condition.wait_for(lock, idle_time);
                 if (tasks.empty()) {
                     if (state == State::kStopping) {
-                        if (--threads_cnt == 0) {
-                            state = State::kStopped;
-                            stop_condition.notify_one();
-                        }
-                        free_threads--;
-                        return;
-                    }
-                    if (threads_cnt == low_watermark) {
-                        while (true) {
-                            assert(threads_cnt == low_watermark);
-                            empty_condition.wait(lock);
-                            if (tasks.empty()) {
-                                if (state == State::kStopping) {
-                                    if (--threads_cnt == 0) {
-                                        state = State::kStopped;
-                                        stop_condition.notify_one();
-                                    }
-                                    free_threads--;
-                                    return;
-                                }
-                            } else {
-                                break;
-                            }
-                        }
-                    } else {
-                        if (state == State::kStopping) {
-                            if (--threads_cnt == 0) {
-                                state = State::kStopped;
-                                stop_condition.notify_one();
-                            }
-                        }
+                        // Stopping (after while)
+                        break;
+                    } else if (threads_cnt > low_watermark) {
+                        // Killing executor
                         threads_cnt--;
                         free_threads--;
                         return;
+                    } else {
+                        continue;
                     }
                 }
             }
+            assert(!tasks.empty());
+            // Execute task
             auto task = tasks.front();
             tasks.pop_front();
             free_threads--;
@@ -164,9 +143,68 @@ private:
             lock.lock();
             free_threads++;
         }
+        // Stopping
+        assert(state == State::kStopping);
+        if (--threads_cnt == 0) {
+            state = State::kStopped;
+            stop_condition.notify_one();
+        }
+        free_threads--;
+
+        /*
+while (true) {
+    if (tasks.empty()) {
+        empty_condition.wait_for(lock, idle_time);
+        if (tasks.empty()) {
+            if (state == State::kStopping) {
+                if (--threads_cnt == 0) {
+                    state = State::kStopped;
+                    stop_condition.notify_one();
+                }
+                free_threads--;
+                return;
+            }
+            if (threads_cnt == low_watermark) {
+                while (true) {
+                    assert(threads_cnt == low_watermark);
+                    empty_condition.wait(lock);
+                    if (tasks.empty()) {
+                        if (state == State::kStopping) {
+                            if (--threads_cnt == 0) {
+                                state = State::kStopped;
+                                stop_condition.notify_one();
+                            }
+                            free_threads--;
+                            return;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            } else {
+                if (state == State::kStopping) {
+                    if (--threads_cnt == 0) {
+                        state = State::kStopped;
+                        stop_condition.notify_one();
+                    }
+                }
+                threads_cnt--;
+                free_threads--;
+                return;
+            }
+        }
+    }
+    auto task = tasks.front();
+    tasks.pop_front();
+    free_threads--;
+    lock.unlock();
+    task();
+    lock.lock();
+    free_threads++;
+}*/
     }
 
-    const std::size_t low_watermark, hight_watermark, max_queue_size;
+    const std::size_t low_watermark, high_watermark, max_queue_size;
     const std::chrono::milliseconds idle_time;
 
     /**

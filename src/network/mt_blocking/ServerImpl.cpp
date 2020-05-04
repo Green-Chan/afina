@@ -89,7 +89,6 @@ void ServerImpl::Stop() {
 void ServerImpl::Join() {
     assert(_thread.joinable());
     _thread.join();
-    close(_server_socket);
 }
 
 // See Server.h
@@ -131,15 +130,14 @@ void ServerImpl::OnRun() {
             _sockets.insert(client_socket);
         }
         if (!executor.Execute(&ServerImpl::Worker, this, client_socket)) {
-            static const std::string msg = "Server is overload";
-            if (send(client_socket, msg.data(), msg.size(), 0) <= 0) {
-                _logger->error("Failed to write response to client: {}", strerror(errno));
-            }
             close(client_socket);
+            std::unique_lock<std::mutex> _lock(sockets_mutex);
+            _sockets.erase(client_socket);
         }
     }
 
     // Cleanup on exit...
+    close(_server_socket);
     {
         std::unique_lock<std::mutex> _lock(sockets_mutex);
         for (auto socket : _sockets) {
@@ -236,7 +234,6 @@ void ServerImpl::Worker(int client_socket) {
                     // Check whether network is still running
                     if (!running.load()) {
                         stopped = true;
-                        all_readed_bytes = 0;
                         break;
                     }
 
@@ -245,10 +242,15 @@ void ServerImpl::Worker(int client_socket) {
                     argument_for_command.resize(0);
                     parser.Reset();
                 }
-            } // while (readed_bytes)
+            } // while (all_readed_bytes > 0)
+            if (stopped) {
+                break;
+            }
         }
 
-        if (readed_bytes == 0) {
+        if (stopped) {
+            _logger->debug("Closing connection, because server is stopped");
+        } else if (readed_bytes == 0) {
             _logger->debug("Connection closed");
         } else {
             throw std::runtime_error(std::string(strerror(errno)));
