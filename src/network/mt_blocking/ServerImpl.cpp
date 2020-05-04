@@ -133,10 +133,6 @@ void ServerImpl::OnRun() {
             new_worker.detach();
         } else {
             _lock.unlock();
-            static const std::string msg = "Server is overload";
-            if (send(client_socket, msg.data(), msg.size(), 0) <= 0) {
-                _logger->error("Failed to write response to client: {}", strerror(errno));
-            }
             close(client_socket);
         }
     }
