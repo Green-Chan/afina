@@ -39,7 +39,7 @@ void ServerImpl::Start(uint16_t port, uint32_t n_accept, uint32_t n_workers) {
     _logger->info("Start mt_blocking network service");
 
     max_workers = n_workers;
-    cnt_workers = 0;
+    _sockets = {};
 
     sigset_t sig_mask;
     sigemptyset(&sig_mask);
@@ -89,7 +89,6 @@ void ServerImpl::Stop() {
 void ServerImpl::Join() {
     assert(_thread.joinable());
     _thread.join();
-    close(_server_socket);
 }
 
 // See Server.h
@@ -127,8 +126,7 @@ void ServerImpl::OnRun() {
         }
 
         std::unique_lock<std::mutex> _lock(workers_mutex);
-        if (cnt_workers < max_workers) {
-            cnt_workers++;
+        if (_sockets.size() < max_workers) {
             _sockets.insert(client_socket);
             _lock.unlock();
             std::thread new_worker(&ServerImpl::Worker, this, client_socket);
@@ -144,12 +142,13 @@ void ServerImpl::OnRun() {
     }
 
     // Cleanup on exit...
+    close(_server_socket);
     {
         std::unique_lock<std::mutex> _lock(workers_mutex);
         for (auto socket : _sockets) {
             shutdown(socket, SHUT_RD);
         }
-        while (cnt_workers) {
+        while (_sockets.size() > 0) {
             workers_finished.wait(_lock);
         }
     }
@@ -268,8 +267,7 @@ void ServerImpl::Worker(int client_socket) {
 
     std::unique_lock<std::mutex> _lock(workers_mutex);
     _sockets.erase(client_socket);
-    cnt_workers--;
-    if (!running && !cnt_workers) {
+    if (!running && _sockets.size() == 0) {
         workers_finished.notify_one();
     }
 }
