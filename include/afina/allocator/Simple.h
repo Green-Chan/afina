@@ -1,8 +1,9 @@
 #ifndef AFINA_ALLOCATOR_SIMPLE_H
 #define AFINA_ALLOCATOR_SIMPLE_H
 
-#include <cstddef>
 #include <string>
+#include <cstddef>
+
 
 namespace Afina {
 namespace Allocator {
