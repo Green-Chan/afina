@@ -5,7 +5,6 @@
 #include <mutex>
 #include <string>
 
-
 #include "SimpleLRU.h"
 
 namespace Afina {
