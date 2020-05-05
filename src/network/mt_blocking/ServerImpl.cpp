@@ -94,6 +94,7 @@ void ServerImpl::Join() {
 // See Server.h
 void ServerImpl::OnRun() {
     Afina::Concurrency::Executor executor(1, max_workers, 3, std::chrono::milliseconds(5000));
+    executor.Start();
     while (running.load()) {
         _logger->debug("waiting for connection...");
 

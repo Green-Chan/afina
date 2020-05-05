@@ -5,7 +5,9 @@
 #include <cassert>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <functional>
+#include <iostream>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -27,7 +29,7 @@ class Executor {
         // completed as requested
         kStopping,
 
-        // Threadpool is stopped
+        // Threadpool is stopped or is not started yet
         kStopped
     };
 
@@ -35,8 +37,20 @@ public:
     Executor(std::size_t low_watermark, std::size_t high_watermark, std::size_t max_queue_size,
              std::chrono::milliseconds idle_time)
         : low_watermark(low_watermark), high_watermark(high_watermark), max_queue_size(max_queue_size),
-          idle_time(idle_time) {
-        std::unique_lock<std::mutex> lock(mutex);
+          idle_time(idle_time), threads_cnt(0), free_threads(0), state(State::kStopped) {}
+    ~Executor() { Stop(); }
+
+    /**
+     * Start thread pool
+     */
+    void Start() {
+        std::unique_lock<std::mutex> lock(this->mutex);
+        if (state == State::kRun) {
+            return;
+        }
+        while (state != State::kStopped) {
+            stop_condition.wait(lock);
+        }
         for (size_t i = 0; i < low_watermark; i++) {
             std::thread new_thread(&Executor::perform, this);
             new_thread.detach();
@@ -45,7 +59,6 @@ public:
         free_threads = low_watermark;
         state = State::kRun;
     }
-    ~Executor() { Stop(); }
 
     /**
      * Signal thread pool to stop, it will stop accepting new jobs and close threads just after each become
@@ -55,12 +68,19 @@ public:
      */
     void Stop(bool await = false) {
         std::unique_lock<std::mutex> lock(this->mutex);
-        state = State::kStopping;
-        if (threads_cnt) {
-            empty_condition.notify_all();
-        } else {
-            state = State::kStopped;
+        if (state == State::kStopped) {
+            return;
         }
+
+        if (state == State::kRun) {
+            state = State::kStopping;
+            if (threads_cnt != 0) {
+                empty_condition.notify_all();
+            } else {
+                state = State::kStopped;
+            }
+        }
+
         if (await) {
             while (state != State::kStopped) {
                 stop_condition.wait(lock);
@@ -115,93 +135,40 @@ private:
         while (true) {
             if (tasks.empty()) {
                 if (state == State::kStopping) {
-                    // Stopping (after while)
+                    // stopping thread after while
                     break;
-                }
-                empty_condition.wait_for(lock, idle_time);
-                if (tasks.empty()) {
-                    if (state == State::kStopping) {
-                        // Stopping (after while)
-                        break;
-                    } else if (threads_cnt > low_watermark) {
-                        // Killing executor
-                        threads_cnt--;
-                        free_threads--;
-                        return;
-                    } else {
-                        continue;
-                    }
-                }
-            }
-            assert(!tasks.empty());
-            // Execute task
-            auto task = tasks.front();
-            tasks.pop_front();
-            free_threads--;
-            lock.unlock();
-            task();
-            lock.lock();
-            free_threads++;
-        }
-        // Stopping
-        assert(state == State::kStopping);
-        if (--threads_cnt == 0) {
-            state = State::kStopped;
-            stop_condition.notify_one();
-        }
-        free_threads--;
-
-        /*
-while (true) {
-    if (tasks.empty()) {
-        empty_condition.wait_for(lock, idle_time);
-        if (tasks.empty()) {
-            if (state == State::kStopping) {
-                if (--threads_cnt == 0) {
-                    state = State::kStopped;
-                    stop_condition.notify_one();
-                }
-                free_threads--;
-                return;
-            }
-            if (threads_cnt == low_watermark) {
-                while (true) {
-                    assert(threads_cnt == low_watermark);
-                    empty_condition.wait(lock);
-                    if (tasks.empty()) {
-                        if (state == State::kStopping) {
-                            if (--threads_cnt == 0) {
-                                state = State::kStopped;
-                                stop_condition.notify_one();
-                            }
-                            free_threads--;
-                            return;
-                        }
-                    } else {
-                        break;
-                    }
+                } else if (empty_condition.wait_for(lock, idle_time) == std::cv_status::timeout &&
+                           threads_cnt > low_watermark) {
+                    // too much free threads
+                    // stopping thread after while
+                    break;
+                } else {
+                    // timeout in low_watermark threads or thread was notified
+                    // (we'll check why it was notified at the next iteration of while
+                    continue;
                 }
             } else {
-                if (state == State::kStopping) {
-                    if (--threads_cnt == 0) {
-                        state = State::kStopped;
-                        stop_condition.notify_one();
-                    }
-                }
-                threads_cnt--;
+                // there is a task
+                auto task = tasks.front();
+                tasks.pop_front();
                 free_threads--;
-                return;
+                lock.unlock();
+                try {
+                    task();
+                } catch (...) {
+                    std::cerr << "Error in executing function" << std::endl;
+                    std::abort();
+                }
+                lock.lock();
+                free_threads++;
             }
         }
-    }
-    auto task = tasks.front();
-    tasks.pop_front();
-    free_threads--;
-    lock.unlock();
-    task();
-    lock.lock();
-    free_threads++;
-}*/
+        // stopping thread
+        if (--threads_cnt == 0 && state == State::kStopping) {
+            state = State::kStopped;
+            stop_condition.notify_all();
+        }
+        free_threads--;
     }
 
     const std::size_t low_watermark, high_watermark, max_queue_size;
