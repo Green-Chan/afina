@@ -1,8 +1,11 @@
-#ifndef AFINA_NETWORK_MT_BLOCKING_SERVER_H
-#define AFINA_NETWORK_MT_BLOCKING_SERVER_H
+#ifndef AFINA_NETWORK_MT_THREADPOOL_SERVER_H
+#define AFINA_NETWORK_MT_THREADPOOL_SERVER_H
 
 #include <atomic>
+#include <condition_variable>
+#include <mutex>
 #include <thread>
+#include <unordered_set>
 
 #include <afina/network/Server.h>
 
@@ -12,7 +15,7 @@ class logger;
 
 namespace Afina {
 namespace Network {
-namespace MTblocking {
+namespace MTthreadpool {
 
 /**
  * # Network resource manager implementation
@@ -38,6 +41,8 @@ protected:
      */
     void OnRun();
 
+    void Worker(int client_socket);
+
 private:
     // Logger instance
     std::shared_ptr<spdlog::logger> _logger;
@@ -52,10 +57,15 @@ private:
 
     // Thread to run network on
     std::thread _thread;
+
+    uint32_t max_workers;
+
+    std::mutex sockets_mutex;
+    std::unordered_set<int> _sockets;
 };
 
-} // namespace MTblocking
+} // namespace MTthreadpool
 } // namespace Network
 } // namespace Afina
 
-#endif // AFINA_NETWORK_MT_BLOCKING_SERVER_H
+#endif // AFINA_NETWORK_MT_THREADPOOL_SERVER_H

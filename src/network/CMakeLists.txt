@@ -2,6 +2,7 @@
 set(SOURCE_FILES
     st_blocking/ServerImpl.cpp
     mt_blocking/ServerImpl.cpp
+    mt_threadpool/ServerImpl.cpp
 
     st_nonblocking/ServerImpl.cpp
     st_nonblocking/Connection.cpp
