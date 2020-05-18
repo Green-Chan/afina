@@ -74,7 +74,7 @@ public:
         } else if (network_type == "mt_nonblock") {
             server = std::make_shared<Afina::Network::MTnonblock::ServerImpl>(storage, logService);
         } else if (network_type == "mt_threadpool") {
-			server = std::make_shared<Afina::Network::MTthreadpool::ServerImpl>(storage, logService);
+            server = std::make_shared<Afina::Network::MTthreadpool::ServerImpl>(storage, logService);
         } else {
             throw std::runtime_error("Unknown network type");
         }
