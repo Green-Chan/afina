@@ -19,6 +19,7 @@
 #include "network/mt_nonblocking/ServerImpl.h"
 #include "network/mt_threadpool/ServerImpl.h"
 #include "network/st_blocking/ServerImpl.h"
+#include "network/st_coroutine/ServerImpl.h"
 #include "network/st_nonblocking/ServerImpl.h"
 
 #include "storage/SimpleLRU.h"
@@ -75,6 +76,8 @@ public:
             server = std::make_shared<Afina::Network::MTnonblock::ServerImpl>(storage, logService);
         } else if (network_type == "mt_threadpool") {
             server = std::make_shared<Afina::Network::MTthreadpool::ServerImpl>(storage, logService);
+        } else if (network_type == "st_coroutine") {
+            server = std::make_shared<Afina::Network::STcoroutine::ServerImpl>(storage, logService);
         } else {
             throw std::runtime_error("Unknown network type");
         }
@@ -107,11 +110,11 @@ public:
     }
 
 private:
-    std::shared_ptr<Afina::Logging::Config> logConfig;
-    std::shared_ptr<Afina::Logging::Service> logService;
+    std::shared_ptr<Logging::Config> logConfig;
+    std::shared_ptr<Logging::Service> logService;
 
     std::shared_ptr<Afina::Storage> storage;
-    std::shared_ptr<Afina::Network::Server> server;
+    std::shared_ptr<Network::Server> server;
 };
 
 // Signal set that to notify application about time to stop
