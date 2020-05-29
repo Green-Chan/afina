@@ -17,6 +17,7 @@
 #include "logging/ServiceImpl.h"
 #include "network/mt_blocking/ServerImpl.h"
 #include "network/mt_nonblocking/ServerImpl.h"
+#include "network/mt_threadpool/ServerImpl.h"
 #include "network/st_blocking/ServerImpl.h"
 #include "network/st_coroutine/ServerImpl.h"
 #include "network/st_nonblocking/ServerImpl.h"
@@ -73,6 +74,8 @@ public:
             server = std::make_shared<Afina::Network::STnonblock::ServerImpl>(storage, logService);
         } else if (network_type == "mt_nonblock") {
             server = std::make_shared<Afina::Network::MTnonblock::ServerImpl>(storage, logService);
+        } else if (network_type == "mt_threadpool") {
+            server = std::make_shared<Afina::Network::MTthreadpool::ServerImpl>(storage, logService);
         } else if (network_type == "st_coroutine") {
             server = std::make_shared<Afina::Network::STcoroutine::ServerImpl>(storage, logService);
         } else {
