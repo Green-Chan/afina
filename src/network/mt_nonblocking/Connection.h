@@ -5,6 +5,7 @@
 #include <queue>
 
 #include <sys/epoll.h>
+#include <sys/uio.h>
 
 #include <afina/Storage.h>
 #include <afina/execute/Command.h>
@@ -39,9 +40,15 @@ private:
 
     int _socket;
     struct epoll_event _event;
+    
     static constexpr size_t buf_size = 4096;
-    char read_buf[buf_size], write_buf[buf_size];
-    size_t read_begin, read_end, write_begin, write_end;
+    char read_buf[buf_size];
+    static constexpr size_t write_vec_size = 64;
+    iovec write_vec[write_vec_size];
+    size_t write_vec_v;
+    std::queue<std::string> written_responeses;
+    
+    size_t read_begin, read_end;
 
     std::size_t arg_remains;
     Protocol::Parser parser;
