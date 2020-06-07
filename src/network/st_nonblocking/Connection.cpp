@@ -1,7 +1,9 @@
 #include "Connection.h"
 
-#include <iostream>
+#include <cassert>
 #include <unistd.h>
+
+#include <iostream>
 
 namespace Afina {
 namespace Network {
@@ -9,36 +11,31 @@ namespace STnonblock {
 
 // See Connection.h
 void Connection::Start() {
-    std::cout << "Start" << std::endl;
     is_alive = true;
-    read_begin = read_end = write_begin = write_end = 0;
+    read_begin = read_end = 0;
+    write_vec_v = 0;
     _event.events = EPOLLIN;
 }
 
 // See Connection.h
 void Connection::OnError() {
-    std::cout << "OnError" << std::endl;
+    is_alive = false;
     _event.events = 0;
 }
 
 // See Connection.h
 void Connection::OnClose() {
-    std::cout << "OnClose" << std::endl;
+    is_alive = false;
     _event.events = 0;
 }
 
 // See Connection.h
-void Connection::Close() {
-    std::cout << "Close" << std::endl;
-    is_alive = false;
-}
+void Connection::Close() { is_alive = false; }
 
 // See Connection.h
 void Connection::DoRead() {
-    std::cout << "DoRead" << std::endl;
     try {
         if ((readed_bytes = read(_socket, read_buf + read_end, buf_size - read_end)) > 0) {
-            std::cout << readed_bytes << std::endl;
             read_end += readed_bytes;
             while (read_end - read_begin > 0) {
                 // There is no command yet
@@ -79,8 +76,11 @@ void Connection::DoRead() {
                     command_to_execute->Execute(*pStorage, argument_for_command, result);
 
                     // Put response in the queue
-                    responses.push(result);
-                    _event.events |= EPOLLOUT;
+                    result += "\r\n";
+                    responses.push(std::move(result));
+                    if (!(_event.events & EPOLLOUT)) {
+                        _event.events |= EPOLLOUT;
+                    }
 
                     // Prepare for the next command
                     command_to_execute.reset();
@@ -97,32 +97,47 @@ void Connection::DoRead() {
             is_alive = false;
         }
     } catch (std::runtime_error &ex) {
-        responses.push("ERROR");
-        _event.events |= EPOLLOUT;
+        responses.push("ERROR\r\n");
+        if (!(_event.events & EPOLLOUT)) {
+            _event.events |= EPOLLOUT;
+        }
     }
 }
 
 // See Connection.h
 void Connection::DoWrite() {
-    std::cout << "DoWrite" << std::endl;
-    while (!responses.empty() && buf_size - write_end >= responses.front().size() + 2) {
-        std::memmove(write_buf + write_end, responses.front().data(), responses.front().size());
-        write_end += responses.front().size() + 2;
-        write_buf[write_end - 2] = '\r';
-        write_buf[write_end - 1] = '\n';
+    while (!responses.empty() && write_vec_v < write_vec_size) {
+        written_responeses.push(std::move(responses.front()));
         responses.pop();
+        write_vec[write_vec_v].iov_base = &(written_responeses.back()[0]);
+        write_vec[write_vec_v].iov_len = written_responeses.back().size();
+        write_vec_v++;
     }
+
     int writed;
-    if ((writed = write(_socket, write_buf + write_begin, write_end - write_begin)) > 0) {
-        write_begin += writed;
-        if (write_begin == write_end) {
-            write_begin = write_end = 0;
-            if (responses.empty()) {
-                _event.events &= ~EPOLLOUT;
-            }
+    if ((writed = writev(_socket, write_vec, write_vec_v)) > 0) {
+        size_t i = 0;
+        while (i < write_vec_v && writed >= write_vec[i].iov_len) {
+            assert(written_responeses.front().c_str() <= write_vec[i].iov_base &&
+                   write_vec[i].iov_base < written_responeses.front().c_str() + written_responeses.front().size());
+            written_responeses.pop();
+            writed -= write_vec[i].iov_len;
+            i++;
         }
+        if (i < write_vec_size && writed > 0) {
+            write_vec[i].iov_base = static_cast<char *>(write_vec[i].iov_base) + writed;
+            write_vec[i].iov_len -= writed;
+        }
+        if (i > 0 && i < write_vec_v) {
+            std::memmove(write_vec, &write_vec[i], (write_vec_v - i) * sizeof(write_vec[0]));
+        }
+        write_vec_v -= i;
     } else {
         is_alive = false;
+    }
+
+    if (responses.empty()) {
+        _event.events &= ~EPOLLOUT;
     }
 }
 
