@@ -13,7 +13,7 @@ namespace STnonblock {
 void Connection::Start() {
     is_alive = true;
     read_begin = read_end = 0;
-    write_vec_v = 0;
+    shift = 0;
     _event.events = EPOLLIN;
 }
 
@@ -77,7 +77,7 @@ void Connection::DoRead() {
 
                     // Put response in the queue
                     result += "\r\n";
-                    responses.push(std::move(result));
+                    responses.push_back(std::move(result));
                     if (!(_event.events & EPOLLOUT)) {
                         _event.events |= EPOLLOUT;
                     }
@@ -97,7 +97,7 @@ void Connection::DoRead() {
             is_alive = false;
         }
     } catch (std::runtime_error &ex) {
-        responses.push("ERROR\r\n");
+        responses.push_back("ERROR\r\n");
         if (!(_event.events & EPOLLOUT)) {
             _event.events |= EPOLLOUT;
         }
@@ -106,32 +106,36 @@ void Connection::DoRead() {
 
 // See Connection.h
 void Connection::DoWrite() {
-    while (!responses.empty() && write_vec_v < write_vec_size) {
-        written_responeses.push(std::move(responses.front()));
-        responses.pop();
-        write_vec[write_vec_v].iov_base = &(written_responeses.back()[0]);
-        write_vec[write_vec_v].iov_len = written_responeses.back().size();
+    static constexpr size_t write_vec_size = 64;
+    iovec write_vec[write_vec_size];
+    size_t write_vec_v = 0;
+    {
+        auto it = responses.begin();
+        assert(shift < it->size());
+        write_vec[write_vec_v].iov_base = &((*it)[0]) + shift;
+        write_vec[write_vec_v].iov_len = it->size() - shift;
+        it++;
         write_vec_v++;
+        for (; it != responses.end(); it++) {
+            write_vec[write_vec_v].iov_base = &((*it)[0]);
+            write_vec[write_vec_v].iov_len = it->size();
+            if (++write_vec_v >= write_vec_size) {
+                break;
+            }
+        }
     }
 
     int writed;
     if ((writed = writev(_socket, write_vec, write_vec_v)) > 0) {
         size_t i = 0;
         while (i < write_vec_v && writed >= write_vec[i].iov_len) {
-            assert(written_responeses.front().c_str() <= write_vec[i].iov_base &&
-                   write_vec[i].iov_base < written_responeses.front().c_str() + written_responeses.front().size());
-            written_responeses.pop();
+            assert(responses.front().c_str() <= write_vec[i].iov_base &&
+                   write_vec[i].iov_base < responses.front().c_str() + responses.front().size());
+            responses.pop_front();
             writed -= write_vec[i].iov_len;
             i++;
         }
-        if (i < write_vec_size && writed > 0) {
-            write_vec[i].iov_base = static_cast<char *>(write_vec[i].iov_base) + writed;
-            write_vec[i].iov_len -= writed;
-        }
-        if (i > 0 && i < write_vec_v) {
-            std::memmove(write_vec, &write_vec[i], (write_vec_v - i) * sizeof(write_vec[0]));
-        }
-        write_vec_v -= i;
+        shift = writed;
     } else {
         is_alive = false;
     }

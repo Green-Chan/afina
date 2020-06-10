@@ -2,8 +2,8 @@
 #define AFINA_NETWORK_ST_NONBLOCKING_CONNECTION_H
 
 #include <cstring>
+#include <deque>
 #include <memory>
-#include <queue>
 
 #include <sys/epoll.h>
 #include <sys/uio.h>
@@ -43,10 +43,6 @@ private:
 
     static constexpr size_t buf_size = 4096;
     char read_buf[buf_size];
-    static constexpr size_t write_vec_size = 64;
-    iovec write_vec[write_vec_size];
-    size_t write_vec_v;
-    std::queue<std::string> written_responeses;
 
     size_t read_begin, read_end;
 
@@ -56,7 +52,8 @@ private:
     std::unique_ptr<Execute::Command> command_to_execute;
     int readed_bytes;
 
-    std::queue<std::string> responses;
+    std::deque<std::string> responses;
+    size_t shift;
 
     bool is_alive;
 
