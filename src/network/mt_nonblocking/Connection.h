@@ -2,7 +2,8 @@
 #define AFINA_NETWORK_MT_NONBLOCKING_CONNECTION_H
 
 #include <cstring>
-#include <queue>
+#include <deque>
+#include <mutex>
 
 #include <sys/epoll.h>
 #include <sys/uio.h>
@@ -18,7 +19,8 @@ namespace MTnonblock {
 
 class Connection {
 public:
-    Connection(int s, std::shared_ptr<Afina::Storage> ps) : _socket(s), pStorage(ps) {
+    Connection(int s, std::shared_ptr<Afina::Storage> ps)
+        : _socket(s), pStorage(ps), is_alive(false), is_started(false) {
         std::memset(&_event, 0, sizeof(struct epoll_event));
         _event.data.ptr = this;
     }
@@ -40,14 +42,10 @@ private:
 
     int _socket;
     struct epoll_event _event;
-    
+
     static constexpr size_t buf_size = 4096;
     char read_buf[buf_size];
-    static constexpr size_t write_vec_size = 64;
-    iovec write_vec[write_vec_size];
-    size_t write_vec_v;
-    std::queue<std::string> written_responeses;
-    
+
     size_t read_begin, read_end;
 
     std::size_t arg_remains;
@@ -56,11 +54,14 @@ private:
     std::unique_ptr<Execute::Command> command_to_execute;
     int readed_bytes;
 
-    std::queue<std::string> responses;
+    std::deque<std::string> responses;
+    size_t shift;
 
-    bool is_alive;
+    bool is_alive, is_started;
 
     std::shared_ptr<Afina::Storage> pStorage;
+
+    std::mutex con_mutex;
 };
 
 } // namespace MTnonblock
