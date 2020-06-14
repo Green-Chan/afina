@@ -18,6 +18,7 @@
 #include <spdlog/logger.h>
 
 #include <afina/Storage.h>
+#include <afina/concurrency/Executor.h>
 #include <afina/execute/Command.h>
 #include <afina/logging/Service.h>
 
@@ -25,7 +26,7 @@
 
 namespace Afina {
 namespace Network {
-namespace MTblocking {
+namespace MTthreadpool {
 
 // See Server.h
 ServerImpl::ServerImpl(std::shared_ptr<Afina::Storage> ps, std::shared_ptr<Logging::Service> pl) : Server(ps, pl) {}
@@ -39,7 +40,6 @@ void ServerImpl::Start(uint16_t port, uint32_t n_accept, uint32_t n_workers) {
     _logger->info("Start mt_blocking network service");
 
     max_workers = n_workers;
-    _sockets = {};
 
     sigset_t sig_mask;
     sigemptyset(&sig_mask);
@@ -93,6 +93,8 @@ void ServerImpl::Join() {
 
 // See Server.h
 void ServerImpl::OnRun() {
+    Afina::Concurrency::Executor executor(1, max_workers, 3, std::chrono::milliseconds(5000));
+    executor.Start();
     while (running.load()) {
         _logger->debug("waiting for connection...");
 
@@ -124,30 +126,26 @@ void ServerImpl::OnRun() {
             tv.tv_usec = 0;
             setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
         }
-
-        std::unique_lock<std::mutex> _lock(workers_mutex);
-        if (_sockets.size() < max_workers) {
+        {
+            std::unique_lock<std::mutex> _lock(sockets_mutex);
             _sockets.insert(client_socket);
-            _lock.unlock();
-            std::thread new_worker(&ServerImpl::Worker, this, client_socket);
-            new_worker.detach();
-        } else {
-            _lock.unlock();
+        }
+        if (!executor.Execute(&ServerImpl::Worker, this, client_socket)) {
             close(client_socket);
+            std::unique_lock<std::mutex> _lock(sockets_mutex);
+            _sockets.erase(client_socket);
         }
     }
 
     // Cleanup on exit...
     close(_server_socket);
     {
-        std::unique_lock<std::mutex> _lock(workers_mutex);
+        std::unique_lock<std::mutex> _lock(sockets_mutex);
         for (auto socket : _sockets) {
             shutdown(socket, SHUT_RD);
         }
-        while (_sockets.size() > 0) {
-            workers_finished.wait(_lock);
-        }
     }
+    executor.Stop(true);
     _logger->warn("Network stopped");
 }
 
@@ -237,7 +235,6 @@ void ServerImpl::Worker(int client_socket) {
                     // Check whether network is still running
                     if (!running.load()) {
                         stopped = true;
-                        all_readed_bytes = 0;
                         break;
                     }
 
@@ -246,10 +243,15 @@ void ServerImpl::Worker(int client_socket) {
                     argument_for_command.resize(0);
                     parser.Reset();
                 }
-            } // while (readed_bytes)
+            } // while (all_readed_bytes > 0)
+            if (stopped) {
+                break;
+            }
         }
 
-        if (readed_bytes == 0) {
+        if (stopped) {
+            _logger->debug("Closing connection, because server is stopped");
+        } else if (readed_bytes == 0) {
             _logger->debug("Connection closed");
         } else {
             throw std::runtime_error(std::string(strerror(errno)));
@@ -261,13 +263,10 @@ void ServerImpl::Worker(int client_socket) {
     // We are done with this connection
     close(client_socket);
 
-    std::unique_lock<std::mutex> _lock(workers_mutex);
+    std::unique_lock<std::mutex> _lock(sockets_mutex);
     _sockets.erase(client_socket);
-    if (!running && _sockets.size() == 0) {
-        workers_finished.notify_one();
-    }
 }
 
-} // namespace MTblocking
+} // namespace MTthreadpool
 } // namespace Network
 } // namespace Afina

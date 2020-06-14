@@ -1,5 +1,5 @@
-#ifndef AFINA_NETWORK_MT_BLOCKING_SERVER_H
-#define AFINA_NETWORK_MT_BLOCKING_SERVER_H
+#ifndef AFINA_NETWORK_MT_THREADPOOL_SERVER_H
+#define AFINA_NETWORK_MT_THREADPOOL_SERVER_H
 
 #include <atomic>
 #include <condition_variable>
@@ -15,7 +15,7 @@ class logger;
 
 namespace Afina {
 namespace Network {
-namespace MTblocking {
+namespace MTthreadpool {
 
 /**
  * # Network resource manager implementation
@@ -59,15 +59,13 @@ private:
     std::thread _thread;
 
     uint32_t max_workers;
-    std::mutex workers_mutex;
 
-    std::condition_variable workers_finished;
-
+    std::mutex sockets_mutex;
     std::unordered_set<int> _sockets;
 };
 
-} // namespace MTblocking
+} // namespace MTthreadpool
 } // namespace Network
 } // namespace Afina
 
-#endif // AFINA_NETWORK_MT_BLOCKING_SERVER_H
+#endif // AFINA_NETWORK_MT_THREADPOOL_SERVER_H
