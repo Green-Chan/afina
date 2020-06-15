@@ -70,13 +70,6 @@ private:
      */
     context *idle_ctx;
 
-    /**
-     * True if stack grows upwards, false if it grows downwards
-     */
-    bool grows_upwards;
-
-    void set_grows_upwards();
-
     unblocker_func _unblock;
 
 protected:
@@ -93,16 +86,29 @@ protected:
     static void no_unblock(Engine &) {}
 
     /**
+     * Invoke func with parameters args in following cases:
+     * - first argument is a pointer to a function and other arguments constitute a suitable argument list,
+     *   which may be empty
+     * - first argument is a pointer to a member function of class Cls, second argument is a pointer
+     *   to an object of class Cls or derived from T,  and other arguments constitute a suitable argument
+     *   list, which may be empty
+     */
+    template <typename... Ta> void inv(void (*func)(Ta...), Ta &&... args) { func(std::forward<Ta>(args)...); }
+    template <typename Cls, typename... Ta> void inv(void (Cls::*func)(Ta...), Cls *self, Ta &&... args) {
+        (self->*func)(std::forward<Ta>(args)...);
+    }
+
+    /**
      * Register new coroutine. It won't receive control until scheduled explicitely or implicitly. In case of some
      * errors function returns nullptr. CoroStackBottom
      */
-    template <typename... Ta> void *run_impl(char *CoroStackBottom, void (*func)(Ta...), Ta &&... args) {
+    template <typename F, typename... Ta> void *run_impl(char *CoroStackBottom, F func, Ta &&... args) {
         // New coroutine context that carries around all information enough to call function
         context *pc = new context();
-        if (grows_upwards) {
-            pc->Low = StackBottom;
+        if (CoroStackBottom > StackBottom) {
+            pc->Low = CoroStackBottom;
         } else {
-            pc->High = StackBottom + 1;
+            pc->High = CoroStackBottom + 1;
         }
 
         // Store current state right here, i.e just before enter new coroutine, later, once it gets scheduled
@@ -114,7 +120,7 @@ protected:
 
             try {
                 // invoke routine
-                func(std::forward<Ta>(args)...);
+                inv(func, std::forward<Ta>(args)...);
             } catch (...) {
                 abort();
             }
@@ -144,7 +150,7 @@ protected:
             // We cannot return here, as this function "returned" once already, so here we must select some other
             // coroutine to run. As current coroutine is completed and can't be scheduled anymore, it is safe to
             // just give up and ask scheduler code to select someone else, control will never returns to this one
-            Restore(*idle_ctx);
+            longjmp(idle_ctx->Environment, 1);
         }
 
         // setjmp remembers position from which routine could starts execution, but to make it correctly
@@ -163,9 +169,7 @@ protected:
 
 public:
     Engine(unblocker_func _unblock = no_unblock)
-        : StackBottom(0), cur_routine(nullptr), alive(nullptr), blocked(nullptr), _unblock(_unblock) {
-        set_grows_upwards();
-    }
+        : StackBottom(0), cur_routine(nullptr), alive(nullptr), blocked(nullptr), _unblock(_unblock) {}
 
     Engine(Engine &&) = delete;
     Engine(const Engine &) = delete;
@@ -212,7 +216,7 @@ public:
      * @param pointer to the main coroutine
      * @param arguments to be passed to the main coroutine
      */
-    template <typename... Ta> void start(void (*main)(Ta...), Ta &&... args) {
+    template <typename F, typename... Ta> void start(F main, Ta &&... args) {
         // To acquire stack begin, create variable on stack and remember its address
         char StackStartsHere;
         this->StackBottom = &StackStartsHere;
@@ -221,11 +225,6 @@ public:
         void *pc = run(main, std::forward<Ta>(args)...);
 
         idle_ctx = new context();
-        if (grows_upwards) {
-            idle_ctx->Low = StackBottom;
-        } else {
-            idle_ctx->High = StackBottom + 1;
-        }
         if (setjmp(idle_ctx->Environment) > 0) {
             if (alive == nullptr) {
                 _unblock(*this);
@@ -234,16 +233,10 @@ public:
             // Here: correct finish of the coroutine section
             yield();
         } else if (pc != nullptr) {
-            Store(*idle_ctx);
             sched(pc);
         }
 
-        assert(alive == nullptr);
-        while (blocked != nullptr) {
-            auto to_del = blocked;
-            blocked = blocked->next;
-            delete to_del;
-        }
+        assert(alive == nullptr && blocked == nullptr);
 
         // Shutdown runtime
         delete idle_ctx;
@@ -254,7 +247,7 @@ public:
      * Register new coroutine. It won't receive control until scheduled explicitely or implicitly. In case of some
      * errors function returns nullptr
      */
-    template <typename... Ta> void *run(void (*func)(Ta...), Ta &&... args) {
+    template <typename F, typename... Ta> void *run(F func, Ta &&... args) {
         if (this->StackBottom == 0) {
             // Engine wasn't initialized yet
             return nullptr;

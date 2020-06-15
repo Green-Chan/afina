@@ -10,26 +10,17 @@
 namespace Afina {
 namespace Coroutine {
 
-void Engine::set_grows_upwards() {
-    if (StackBottom == 0) {
-        char here;
-        StackBottom = &here;
-        set_grows_upwards();
-        StackBottom = 0;
-    } else {
-        char here;
-        grows_upwards = (&here > StackBottom);
-    }
-}
-
 void Engine::Store(context &ctx) {
+    assert(&ctx != idle_ctx);
+    // idle_ctx should be stored in a special way
+
     char EndOfStack;
-    if (grows_upwards) {
+    if (&EndOfStack > StackBottom) {
         ctx.High = &EndOfStack + 1;
     } else {
         ctx.Low = &EndOfStack;
     }
-    assert(ctx.High > ctx.Low);
+    assert(ctx.Low > 0 && ctx.High > ctx.Low);
     auto stack_size = ctx.High - ctx.Low;
     if (std::get<1>(ctx.Stack) < stack_size || (std::get<1>(ctx.Stack) / 2 > stack_size)) {
         if (std::get<0>(ctx.Stack)) {
@@ -42,23 +33,17 @@ void Engine::Store(context &ctx) {
 }
 
 void Engine::Restore(context &ctx) {
+    assert(&ctx != idle_ctx);
+    // idle_ctx should be restored in a special way
+
+    assert(ctx.Low > 0 && ctx.High > ctx.Low);
     char here;
-    if (grows_upwards) {
-        while (&here <= ctx.High) {
-            Restore(ctx);
-        }
-    } else {
-        while (&here >= ctx.Low) {
-            Restore(ctx);
-        }
+    while (&here <= ctx.High && &here >= ctx.Low) {
+        Restore(ctx);
     }
+    assert(std::get<1>(ctx.Stack) >= ctx.High - ctx.Low);
     std::memcpy(ctx.Low, std::get<0>(ctx.Stack), ctx.High - ctx.Low);
-    if (&ctx != idle_ctx) {
-        cur_routine = &ctx;
-        assert(cur_routine != nullptr);
-    } else {
-        assert(cur_routine == nullptr);
-    }
+    cur_routine = &ctx;
     longjmp(ctx.Environment, 1);
 }
 
@@ -135,31 +120,30 @@ void Engine::block(void *coro) {
         } else {
             Store(*cur_routine);
             cur_routine = nullptr;
-            Restore(*idle_ctx);
+            longjmp(idle_ctx->Environment, 1);
         }
     }
 }
 
 void Engine::unblock(void *coro) {
-    auto coroutine = static_cast<context *>(coro);
-    for (auto routine = blocked; routine != nullptr; routine = routine->next) {
-        if (routine == coroutine) {
-            if (routine->prev) {
-                routine->prev->next = routine->next;
-            } else {
-                blocked = routine->next;
-            }
-            if (routine->next) {
-                routine->next->prev = routine->prev;
-            }
-            routine->prev = nullptr;
-            routine->next = alive;
-            alive = routine;
-            if (alive->next) {
-                alive->next->prev = alive;
-            }
-            break;
-        }
+    assert(coro != nullptr);
+    auto routine = static_cast<context *>(coro);
+    if (routine->prev) {
+        routine->prev->next = routine->next;
+    } else if (blocked == routine) {
+        blocked = routine->next;
+    } else {
+        assert(alive == routine);
+        return;
+    }
+    if (routine->next) {
+        routine->next->prev = routine->prev;
+    }
+    routine->prev = nullptr;
+    routine->next = alive;
+    alive = routine;
+    if (alive->next) {
+        alive->next->prev = alive;
     }
 }
 

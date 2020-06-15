@@ -182,8 +182,8 @@ void ServerImpl::Join() {
 
 // See ServerImpl.h
 void ServerImpl::OnRun() {
-    // engine->start(&ServerImpl::Run, this);
-    engine->start(static_cast<void (*)(ServerImpl *)>([](ServerImpl *s) -> void { s->Run(); }), this);
+    engine->start(&ServerImpl::Run, this);
+    // engine->start(static_cast<void (*)(ServerImpl *)>([](ServerImpl *s) -> void { s->Run(); }), this);
 }
 
 // See ServerImpl.h

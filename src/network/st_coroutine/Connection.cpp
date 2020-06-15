@@ -65,9 +65,9 @@ void Connection::Start() {
     is_alive = true;
     read_begin = read_end = write_begin = write_end = 0;
     _event.events = EPOLLIN;
-    // coroutine = engine->run(&Connection::Run, this);
+    coroutine = engine->run(&Connection::Run, this);
 
-    coroutine = engine->run(static_cast<void (*)(Connection *)>([](Connection *s) -> void { s->Run(); }), this);
+    // coroutine = engine->run(static_cast<void (*)(Connection *)>([](Connection *s) -> void { s->Run(); }), this);
 }
 
 // See Connection.h
